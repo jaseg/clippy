@@ -8,13 +8,13 @@ import time
 import numpy
 import bz2
 import os
+import functools
 
 from PIL import Image
 
 from pixelterm import pixelterm
 
 HOST, PORT    = "172.23.42.29",2342
-DISPLAY_WIDTH, DISPLAY_HEIGHT = 56*8, 12*19
 CMD_LED_DRAW = 18
 
 def resize_image(img, size):
@@ -31,16 +31,12 @@ def resize_image(img, size):
 class Display:
 	def __init__(self):
 		self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		self.size = 56*8, 8*20
 
 	def sendframe(self, frame):
-		buf = numpy.frombuffer(frame.tobytes(), dtype='1b')
-		print('sendbuf: len', len(buf))
-		buf_narfed = numpy.concatenate([ buf[(i*12)*DISPLAY_WIDTH: (i*12+8)*DISPLAY_WIDTH] for i in range(20) ])
-#		txdata = numpy.packbits(buf_narfed).tobytes()
-		txdata = buf_narfed
 		self.sock.sendto(struct.pack('!HHHHH', CMD_LED_DRAW, 0,
 			(56*8*(12*20-8))%65536, 0x627a, 0) + # do. not. fucking. ask.
-				bz2.compress(txdata), (HOST, PORT))
+				bz2.compress(frame), (HOST, PORT))
 
 	@staticmethod
 	def do_gamma(im, gamma):
@@ -50,6 +46,10 @@ class Display:
 		lut = lut*4 # need one set of data for each band for RGBA
 		im = im.point(lut)
 		return im
+
+	@staticmethod
+	def encode_image(img, displaysize):
+		return numpy.frombuffer(Display.do_gamma(resize_image(img, displaysize), 0.5).convert('1').tobytes(), dtype='1b')
 
 def weightedChoice(choices, default=None):
 	acc = 0
@@ -74,10 +74,6 @@ class Agent:
 					f['next'] = lambda f, idx: f['exitBranch']
 				else:
 					f['next'] = lambda f, idx: idx+1
-				if 'images' in f:
-					self.sendframe(
-							Display.do_gamma(
-								resize_image(img, (DISPLAY_WIDTH, DISPLAY_HEIGHT)), 0.5).convert('1'))
 		self.picmap = Image.open(path / 'map.png')
 		self.path   = path
 	
@@ -85,9 +81,22 @@ class Agent:
 		print('Playing:', action)
 		for frame in self._animate(action):
 			print('frame:', frame)
-			if 'images' in frame: # some frames contain branch info and sound, but no images
-				yield self.get_image(*frame['images'][0])
+			if 'images_encoded' in frame: # some frames contain branch info and sound, but no images
+				yield frame['images_encoded']
 			time.sleep(frame['duration']/1000)
+
+	def precalculate_images(self, dsp, termsize):
+		for ani in self.config['animations'].values():
+			for f in ani['frames']:
+				if 'images' in f:
+					f['images_encoded'] = self._precalculate_one_image(tuple(f['images'][0]), dsp, termsize)
+		self._precalculate_one_image.cache_clear()
+	
+	@functools.lru_cache(maxsize=None)
+	def _precalculate_one_image(self, coords, dsp, termsize):
+		img = self.get_image(*coords)
+		return ( dsp.encode_image(img, dsp.size) if dsp else None,
+			pixelterm.termify_pixels(resize_image(img, termsize)) if termsize else None )
 	
 	def _animate(self, action):
 		anim, idx = self.config['animations'][action]['frames'], 0
@@ -125,12 +134,13 @@ if __name__ == '__main__':
 		print('\n'.join(Agent(agent_path).animations))
 		sys.exit(0)
 
-	dsp = Display()
-
+	dsp = Display() if args.display else None
+	agent = Agent(agent_path)
 	tx, ty = os.get_terminal_size()
-	termsize = (tx, ty*2)
+	termsize = (tx, ty*2) if args.terminal else None
+	agent.precalculate_images(dsp, termsize)
+
 	if args.endless:
-		agent = Agent(agent_path)
 		while True:
 			if random.random() > 0.2:
 				for img_dsp, img_term in agent(random.choice(agent.animations)):
@@ -141,16 +151,10 @@ if __name__ == '__main__':
 					if args.display:
 						dsp.sendframe(img_dsp)
 			time.sleep(1)
-
 	else:
-		for img_dsp,  img_term in Agent(agent_path)(args.action):
+		for img_dsp,  img_term in agent(args.action):
 			if args.terminal:
 				print(pixelterm.termify_pixels(
 						resize_image(img, termsize)))
-#			print(pixelterm.termify_pixels(
-#					img.thumbnail((80, 40))
-#					.convert('1', dither=Image.FLOYDSTEINBERG)
-#					.convert('RGBA', dither=Image.FLOYDSTEINBERG)))
-#			print('display size:', (DISPLAY_WIDTH, DISPLAY_HEIGHT))
 			if args.display:
 				dsp.sendframe(img_dsp)
