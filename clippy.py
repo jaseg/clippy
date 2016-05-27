@@ -60,22 +60,24 @@ class Display:
 		return np.frombuffer(Display.do_gamma(resize_image(img, displaysize), 0.5).convert('1').tobytes(), dtype='1b')
 
 class Pixelflut:
-	def __init__(self, host, port, x, y, w, h):
+	def __init__(self, host, port, x, y, w, h, reps):
 		self.host, self.port = host.encode(), port
 		self.x, self.y = x, y
 		self.w, self.h = w, h
+		self.reps = reps
 		self.dbuf = np.zeros(w*h*4, dtype=np.uint8)
 		self.so = ctypes.CDLL('./pixelflut.so')
 		self.sock = None
 	
 	def sendframe(self, idx):
-		if self.sock is None:
-			while self.sock is None or self.sock < 0:
-				time.sleep(1)
-				self.sock = self.so.cct(self.host, self.port)
-		if self.so.sendframe(self.sock, idx, self.w, self.h, self.x, self.y):
-			self.so.discct(self.sock)
-			self.sock = None
+		for _ in range(self.reps):
+			if self.sock is None:
+				while self.sock is None or self.sock < 0:
+					time.sleep(1)
+					self.sock = self.so.cct(self.host, self.port)
+			if self.so.sendframe(self.sock, idx, self.w, self.h, self.x, self.y):
+				self.so.discct(self.sock)
+				self.sock = None
 
 	def encode_image(self, img):
 		frame = np.array(resize_image(img, (self.w, self.h), blackbg=False)).reshape(self.w*self.h*4)
@@ -187,9 +189,9 @@ if __name__ == '__main__':
 		host, port = target.split(':')
 		port = int(port)
 		x, y, *_r = params[0].split(',') if params else (0, 0, None)
-		w, h = _r if _r else (320, 240)
-		x, y, w, h = map(int, (x, y, w, h))
-		pf = Pixelflut(host, port, x, y, w, h) if args.pixelflut else None
+		w, h, reps = _r if _r else (320, 240)
+		x, y, w, h, reps = map(int, (x, y, w, h, reps))
+		pf = Pixelflut(host, port, x, y, w, h, reps) if args.pixelflut else None
 	else:
 		pf = None
 	agent = Agent(agent_path)
