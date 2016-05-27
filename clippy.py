@@ -68,18 +68,20 @@ class Pixelflut:
 		self.so = ctypes.CDLL('./pixelflut.so')
 		self.sock = None
 	
-	def sendframe(self, frame):
-		np.copyto(self.dbuf, frame)
-		cptr = self.dbuf.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+	def sendframe(self, idx):
 		if self.sock is None:
 			while self.sock is None or self.sock < 0:
 				time.sleep(1)
 				self.sock = self.so.cct(self.host, self.port)
-		if self.so.sendframe(self.sock, cptr, self.w, self.h, self.x, self.y):
+		if self.so.sendframe(self.sock, idx, self.w, self.h, self.x, self.y):
 			self.so.discct(self.sock)
+			self.sock = None
 
 	def encode_image(self, img):
-		return np.array(resize_image(img, (self.w, self.h), blackbg=False)).reshape(self.w*self.h*4)
+		frame = np.array(resize_image(img, (self.w, self.h), blackbg=False)).reshape(self.w*self.h*4)
+		np.copyto(self.dbuf, frame)
+		cptr = self.dbuf.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+		return self.so.store_image(cptr, self.w, self.h)
 
 def weightedChoice(choices, default=None):
 	acc = 0
