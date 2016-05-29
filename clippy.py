@@ -11,11 +11,14 @@ import os
 import functools
 import contextlib
 import math
-import ctypes
+import threading
 
 from PIL import Image
 
 from pixelterm import pixelterm
+
+import pxf
+from misc import resize_image
 
 HOST, PORT    = "172.23.42.29",2342
 CMD_LED_DRAW = 18
@@ -58,32 +61,6 @@ class Display:
 	@staticmethod
 	def encode_image(img, displaysize):
 		return np.frombuffer(Display.do_gamma(resize_image(img, displaysize), 0.5).convert('1').tobytes(), dtype='1b')
-
-class Pixelflut:
-	def __init__(self, host, port, x, y, w, h, reps):
-		self.host, self.port = host.encode(), port
-		self.x, self.y = x, y
-		self.w, self.h = w, h
-		self.reps = reps
-		self.dbuf = np.zeros(w*h*4, dtype=np.uint8)
-		self.so = ctypes.CDLL('./pixelflut.so')
-		self.sock = None
-	
-	def sendframe(self, idx):
-		for _ in range(self.reps):
-			if self.sock is None:
-				while self.sock is None or self.sock < 0:
-					time.sleep(1)
-					self.sock = self.so.cct(self.host, self.port)
-			if self.so.sendframe(self.sock, idx, self.w, self.h, self.x, self.y):
-				self.so.discct(self.sock)
-				self.sock = None
-
-	def encode_image(self, img):
-		frame = np.array(resize_image(img, (self.w, self.h), blackbg=False)).reshape(self.w*self.h*4)
-		np.copyto(self.dbuf, frame)
-		cptr = self.dbuf.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
-		return self.so.store_image(cptr, self.w, self.h)
 
 def weightedChoice(choices, default=None):
 	acc = 0
@@ -164,7 +141,9 @@ if __name__ == '__main__':
 	parser.add_argument('-a', '--agent', default='Clippy')
 	parser.add_argument('-e', '--endless', action='store_true')
 	parser.add_argument('-d', '--display', action='store_true')
-	parser.add_argument('-p', '--pixelflut', type=str, default='94.45.232.225:1234')
+	parser.add_argument('-i', '--interactive', action='store_true')
+	parser.add_argument('-w', '--wait', type=int, default=120)
+	parser.add_argument('-p', '--pixelflut', type=str)
 	parser.add_argument('-t', '--terminal', action='store_true')
 	parser.add_argument('-x', '--termsize', type=str)
 	parser.add_argument('-s', '--socket', action='store_true')
@@ -173,10 +152,13 @@ if __name__ == '__main__':
 	parser.add_argument('action', default='Greeting', nargs='?')
 	args = parser.parse_args()
 
-	agent_path = pathlib.Path('agents') / args.agent
-	if not agent_path.is_dir():
-		print('Agent not found. Exiting.')
-		sys.exit(1)
+	agent_paths = []
+	for agent in args.agent.split(','):
+		agent_path = pathlib.Path('agents') / agent
+		if not agent_path.is_dir():
+			print('Agent "{}" not found. Exiting.'.format(agent))
+			sys.exit(1)
+		agent_paths.append(agent_path)
 
 	if args.list:
 		print('\n'.join(Agent(agent_path).animations))
@@ -191,19 +173,72 @@ if __name__ == '__main__':
 		x, y, *_r = params[0].split(',') if params else (0, 0, None)
 		w, h, reps = _r if _r else (320, 240)
 		x, y, w, h, reps = map(int, (x, y, w, h, reps))
-		pf = Pixelflut(host, port, x, y, w, h, reps) if args.pixelflut else None
+		pf = pxf.Pixelflut(host, port, x, y, w, h, reps) if args.pixelflut else None
 	else:
 		pf = None
-	agent = Agent(agent_path)
-	if args.socket:
-		tx, ty = (args.termsize or '60x30').split('x')
-		tx, ty = int(tx), int(ty)
-	elif args.terminal:
-		tx, ty = args.termsize.split('x') or os.get_terminal_size()
-		tx, ty = int(tx), int(ty)
-	termsize = (tx, ty*2) if args.terminal or args.socket else None
-	agent.precalculate_images(pf, dsp, termsize)
+	agents = []
+	for path in agent_paths:
+		agent = Agent(path)
+		if args.socket:
+			tx, ty = (args.termsize or '60x30').split('x')
+			tx, ty = int(tx), int(ty)
+		elif args.terminal:
+			tx, ty = args.termsize.split('x') or os.get_terminal_size()
+			tx, ty = int(tx), int(ty)
+		termsize = (tx, ty*2) if args.terminal or args.socket else None
+		agent.precalculate_images(pf, dsp, termsize)
+		agents.append(agent)
 
+	runlock = threading.Lock()
+	ts = time.time()
+	if args.interactive:
+		from tkinter import *
+
+		def recalc_size(delta):
+			global runlock
+			with runlock:
+				print('resetting')
+				pf.reset_images()
+				pf.w += delta
+				pf.h += delta
+				print('recalcing')
+				for agent in Agents:
+					agent.precalculate_images(pf, dsp, termsize)
+
+		def keyfunc(ev):
+			global ts
+			ch = ev.char
+			if ch == '+':
+				recalc_size(50)
+			elif ch == '-':
+				recalc_size(-50)
+			if ch == 'w':
+				pf.y -= 10
+			elif ch == 'a':
+				pf.x -= 10
+			elif ch == 's':
+				pf.y += 10
+			elif ch == 'd':
+				pf.x += 10
+			elif ch == 'e':
+				pf.reps += 1
+			elif ch == 'q':
+				if pf.reps > 1:
+					pf.reps -= 1
+			elif ch == 'n':
+				ts = time.time() - args.wait - 1
+
+		def tkrun():
+			tkr = Tk()
+			tkf = Frame(tkr, width=100, height=100)
+			tkf.bind('<Key>', keyfunc)
+			tkf.pack()
+			tkf.focus_set()
+			tkr.mainloop()
+
+		tkrunner = threading.Thread(target=tkrun, daemon=True)
+		tkrunner.start()
+	
 	if args.socket:
 		import socketserver
 		class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
@@ -211,6 +246,7 @@ if __name__ == '__main__':
 		class ClippyRequestHandler(socketserver.BaseRequestHandler):
 			def handle(self):
 				with contextlib.suppress(BrokenPipeError):
+					agent = random.choice(agents)
 					while True:
 						action = random.choice(agent.animations)
 						print('[\033[38;5;245m{}\033[0m] Playing: {}'.format(self.client_address[0], action))
@@ -222,20 +258,29 @@ if __name__ == '__main__':
 		server.serve_forever()
 	elif args.endless:
 		while True:
-			if random.random() > 0.2:
-				action = random.choice(agent.animations)
-				print('Playing:', action)
-				for img_pf, img_dsp, img_term in agent(action, not args.nosleep):
-					if args.terminal:
-						print('\033[H'+img_term)
-					if args.display:
-						dsp.sendframe(img_dsp)
-					if args.pixelflut:
-						pf.sendframe(img_pf)
-			if not args.nosleep:
-				time.sleep(1)
+			print('Starting', ts)
+			for agent in agents:
+				while time.time() - ts < args.wait:
+					if random.random() > 0.2:
+						action = random.choice(agent.animations)
+						print('Playing:', action)
+						for img_pf, img_dsp, img_term in agent(action, not args.nosleep):
+							with runlock:
+								if args.terminal:
+									print('\033[H'+img_term)
+								if args.display:
+									dsp.sendframe(img_dsp)
+								if args.pixelflut:
+									pf.sendframe(img_pf)
+								if time.time() - ts > args.wait:
+									print('Force-advance', ts)
+									break
+					if not args.nosleep:
+						time.sleep(1)
+				print('Advancing', ts)
+				ts = time.time()
 	else:
-		for img_pf, img_dsp, img_term in agent(args.action, not args.nosleep):
+		for img_pf, img_dsp, img_term in agents[0](args.action, not args.nosleep):
 			if args.terminal:
 				print(pixelterm.termify_pixels(
 						resize_image(img, termsize)))

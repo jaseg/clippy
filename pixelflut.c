@@ -20,6 +20,24 @@ int store_image(const uint8_t *img, int w, int h) {
     return image_count++;
 }
 
+int store_image_idx(const uint8_t *img, int w, int h, int idx) {
+    if (idx >= sizeof(images)/sizeof(images[0]))
+        return -1;
+    if (images[idx])
+        free(images[idx]);
+    images[idx] = malloc(w*h*4);
+    memcpy(images[idx], img, w*h*4);
+    return 0;
+}
+
+void reset_images() {
+    for (int i=0; i<image_count; i++) {
+        free(images[i]);
+        images[i] = NULL;
+    }
+    image_count = 0;
+}
+
 #define PIXEL_FORMAT "PX %zd %zd %02x%02x%02x\n"
 int cct(const char *target, int port) {
     printf("Reconnecting %s:%d\n", target, port);
@@ -48,7 +66,7 @@ int cct(const char *target, int port) {
 
 int sendframe(int fd, int idx, int w, int h, int ox, int oy) {
     static unsigned long fcnt=0;
-    printf("frame %lu %dx%d @pos %dx%d\n", fcnt++, w, h, ox, oy);
+//    printf("frame %lu %dx%d @pos %dx%d\n", fcnt++, w, h, ox, oy);
     int fmtlen = snprintf(NULL, 0, PIXEL_FORMAT, (size_t)1000, (size_t)1000, 0xff, 0xff, 0xff);
     char *out = malloc(1400);
     if (!out) {
@@ -74,7 +92,6 @@ int sendframe(int fd, int idx, int w, int h, int ox, int oy) {
         }
     }
     free(out);
-    usleep(1000);
     return 0;
 }
 
