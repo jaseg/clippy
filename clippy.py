@@ -97,17 +97,17 @@ class Agent:
 				time.sleep(frame['duration']/1000)
 
 	def precalculate_images(self, pf, dsp, termsize):
-		print('\033[93mPrecalculating images\033[0m')
+		print('\033[93mPrecalculating images\033[0m', flush=True)
 		total = sum(1 for ani in self.config['animations'].values() for f in ani['frames'] if 'images' in f)
 		i = 0
 		for ani in self.config['animations'].values():
 			for f in ani['frames']:
 				if 'images' in f:
-					print(('(\033[38;5;245m{: '+str(1+int(math.log10(total)))+'}/{}\033[0m) ').format(i, total), end='')
+					print(('(\033[38;5;245m{: '+str(1+int(math.log10(total)))+'}/{}\033[0m)').format(i, total), end='', flush=True)
 					i += 1
 					f['images_encoded'] = self._precalculate_one_image(tuple(f['images'][0]), pf, dsp, termsize)
-					print()
-		print('\033[93mdone.\033[0m')
+					print(flush=True)
+		print('\033[93mdone.\033[0m', flush=True)
 		self._precalculate_one_image.cache_clear()
 	
 	@functools.lru_cache(maxsize=None)
@@ -125,7 +125,7 @@ class Agent:
 
 	def _get_image(self, x, y):
 		print('\033[38;5;96mcropbox:\033[0m {:04} {:04} {:04} {:04} \033[38;5;96mmap:\033[0m {:04} {:04}'.format(
-			x, y, *self.config['framesize'], *self.picmap.size), end='')
+			x, y, *self.config['framesize'], *self.picmap.size), end='', flush=True)
 		tw, th = self.config['framesize']
 		return self.picmap.crop((x, y, x+tw, y+th))
 
@@ -156,12 +156,12 @@ if __name__ == '__main__':
 	for agent in args.agent.split(','):
 		agent_path = pathlib.Path('agents') / agent
 		if not agent_path.is_dir():
-			print('Agent "{}" not found. Exiting.'.format(agent))
+			print('Agent "{}" not found. Exiting.'.format(agent), flush=True)
 			sys.exit(1)
 		agent_paths.append(agent_path)
 
 	if args.list:
-		print('\n'.join(Agent(agent_path).animations))
+		print('\n'.join(Agent(agent_path).animations), flush=True)
 		sys.exit(0)
 
 	dsp = Display() if args.display else None
@@ -197,11 +197,11 @@ if __name__ == '__main__':
 		def recalc_size(delta):
 			global runlock
 			with runlock:
-				print('resetting')
+				print('resetting', flush=True)
 				pf.reset_images()
 				pf.w += delta
 				pf.h += delta
-				print('recalcing')
+				print('recalcing', flush=True)
 				for agent in Agents:
 					agent.precalculate_images(pf, dsp, termsize)
 
@@ -249,7 +249,7 @@ if __name__ == '__main__':
 					agent = random.choice(agents)
 					while True:
 						action = random.choice(agent.animations)
-						print('[\033[38;5;245m{}\033[0m] Playing: {}'.format(self.client_address[0], action))
+						print('[\033[38;5;245m{}\033[0m] Playing: {}'.format(self.client_address[0], action), flush=True)
 						for _img_pf, _img_dsp, img_term in agent(action):
 							self.request.sendall(b'\033[H'+img_term.encode())
 		host, port = args.bind.split(':')
@@ -258,31 +258,31 @@ if __name__ == '__main__':
 		server.serve_forever()
 	elif args.endless:
 		while True:
-			print('Starting', ts)
+			print('Starting', ts, flush=True)
 			for agent in agents:
 				while time.time() - ts < args.wait:
 					if random.random() > 0.2:
 						action = random.choice(agent.animations)
-						print('Playing:', action)
+						print('Playing:', action, flush=True)
 						for img_pf, img_dsp, img_term in agent(action, not args.nosleep):
 							with runlock:
 								if args.terminal:
-									print('\033[H'+img_term)
+									print('\033[H'+img_term, flush=True)
 								if args.display:
 									dsp.sendframe(img_dsp)
 								if args.pixelflut:
 									pf.sendframe(img_pf)
 								if time.time() - ts > args.wait:
-									print('Force-advance', ts)
+									print('Force-advance', ts, flush=True)
 									break
 					if not args.nosleep:
 						time.sleep(1)
-				print('Advancing', ts)
+				print('Advancing', ts, flush=True)
 				ts = time.time()
 	else:
 		for img_pf, img_dsp, img_term in agents[0](args.action, not args.nosleep):
 			if args.terminal:
-				print(img_term) #pixelterm.termify_pixels(
+				print(img_term, flush=True) #pixelterm.termify_pixels(
 						#resize_image(img, termsize)))
 			if args.display:
 				dsp.sendframe(img_dsp)
