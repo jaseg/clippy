@@ -282,8 +282,8 @@ if __name__ == '__main__':
 	else:
 		for img_pf, img_dsp, img_term in agents[0](args.action, not args.nosleep):
 			if args.terminal:
-				print(pixelterm.termify_pixels(
-						resize_image(img, termsize)))
+				print(img_term) #pixelterm.termify_pixels(
+						#resize_image(img, termsize)))
 			if args.display:
 				dsp.sendframe(img_dsp)
 			if args.pixelflut:
